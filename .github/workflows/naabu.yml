@@ -1,0 +1,100 @@
+name: Naabu Port Scan
+
+on:
+  workflow_dispatch:
+  
+  push:
+    branches: [main]
+    paths:
+      - 'live.txt'
+
+jobs:
+  naabu-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install Naabu
+        run: |
+          go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+          naabu -version
+
+      - name: Run Naabu Scan
+        run: |
+          if [ ! -f live.txt ]; then
+            echo "❌ live.txt not found!"
+            exit 1
+          fi
+          
+          echo "=== Starting naabu scan ==="
+          echo "Total hosts in live.txt: $(wc -l < live.txt)"
+          
+          naabu \
+            -list live.txt \
+            -top-ports 100 \
+            -o live-ports.txt
+          
+          echo "=== naabu scan completed ==="
+          echo "Total open ports found: $(wc -l < live-ports.txt)"
+          echo "=== Results ==="
+          cat live-ports.txt
+
+      - name: Send Results to Discord (as File)
+        if: success()
+        run: |
+          HOSTS_COUNT=$(wc -l < live.txt)
+          PORTS_COUNT=$(wc -l < live-ports.txt)
+          
+          curl -X POST \
+            -H "Content-Type: multipart/form-data" \
+            -F "file=@live-ports.txt" \
+            -F "payload_json={
+              \"username\": \"Naabu Bot\",
+              \"avatar_url\": \"https://avatars.githubusercontent.com/u/50994705\",
+              \"embeds\": [{
+                \"title\": \"🔥 Naabu Port Scan Results\",
+                \"description\": \"Scan completed successfully!\",
+                \"color\": 15158332,
+                \"fields\": [
+                  {
+                    \"name\": \"📥 Input Hosts\",
+                    \"value\": \"${HOSTS_COUNT}\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"🔓 Open Ports Found\",
+                    \"value\": \"${PORTS_COUNT}\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"📊 Top Ports\",
+                    \"value\": \"100\",
+                    \"inline\": true
+                  },
+                  {
+                    \"name\": \"📎 Attachment\",
+                    \"value\": \"live-ports.txt\",
+                    \"inline\": true
+                  }
+                ],
+                \"footer\": {
+                  \"text\": \"naabu • $(date -u +\"%Y-%m-%d %H:%M UTC\")\" 
+                }
+              }]
+            }" \
+            ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      - name: Upload Results as Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: naabu-port-scan
+          path: live-ports.txt
